@@ -10,13 +10,32 @@ logging.basicConfig(
     format = '%(asctime)s %(levelname)s %(message)s',
 )
 
+class VarnishAuth():
+    import hashlib
+
+    def __init__(self, secret):
+        self.secret = secret
+
+    def auth_hash(self, challenge):
+        data = "%s\x0a%s\x0a%s\x0a" % (challenge, self.secret, challenge)
+        auth_hash = self.hashlib.sha256(data).hexdigest()
+        return auth_hash
+
 class VarnishHandler(Telnet):
-    def __init__(self, host_port_timeout):
+    def __init__(self, server):
+        host_port_timeout = server.addr
+        secret = server.secret
         if isinstance(host_port_timeout, basestring):
             host_port_timeout = host_port_timeout.split(':')
         Telnet.__init__(self, *host_port_timeout)
         # Eat the preamble ...
-        self.read_until("Type 'quit' to close CLI session.\n\n")
+        #self.read_until("Type 'quit' to close CLI session.\n\n")
+        if secret:
+            self.auth_token = self.read_until("Authentication required.\n\n").split('\n')[1]
+            resp = self.auth(VarnishAuth(secret).auth_hash(self.auth_token))
+            self.read_until("\n")
+        else:
+            self.read_until("Type 'quit' to close CLI session.\n\n")
 
     def quit(self): self.close()
         
@@ -38,6 +57,10 @@ class VarnishHandler(Telnet):
     def start(self): return self.fetch('start')
     def stop(self): return self.fetch('stop')
     
+    def auth(self, auth_hash):
+        cmd = 'auth %s' % auth_hash
+        return self.fetch(cmd)
+
     # Information methods
     def ping(self, timestamp=None):
         cmd = 'ping'
@@ -64,7 +87,7 @@ class VarnishHandler(Telnet):
         return self.fetch('vcl.inline %s %s' % (configname, vclcontent))
 
     def vcl_show(self, configname):
-        return self.fetch('vcl.show' % configname)
+        return self.fetch('vcl.show %s' % configname)
     
     def vcl_use(self, configname):
         return self.fetch('vcl.use %s' % configname)
@@ -106,13 +129,13 @@ class ThreadedRunner(Thread):
     """
     Runs commands on a particular varnish server in a separate thread
     """
-    def __init__(self, addr, *commands):
-        self.addr = addr
+    def __init__(self, server, *commands):
+        self.server = server
         self.commands = commands
         super(ThreadedRunner, self).__init__()
         
     def run(self):
-        handler = VarnishHandler(self.addr)
+        handler = VarnishHandler(self.server)
         for cmd in self.commands:
             if isinstance(cmd, tuple) and len(cmd)>1:
                 getattr(handler, cmd[0].replace('.','_'))(*cmd[1:])
@@ -120,12 +143,12 @@ class ThreadedRunner(Thread):
                 getattr(handler, cmd.replace('.','_'))()
         handler.close()
 
-def run(addr, *commands):
+def run(server, *commands):
     """
     Non-threaded batch command runner returning output results
     """
     results = []
-    handler = VarnishHandler(addr)
+    handler = VarnishHandler(server)
     for cmd in commands:
         if isinstance(cmd, tuple) and len(cmd)>1:
             results.extend([getattr(handler, c[0].replace('.','_'))(*c[1:]) for c in cmd])
@@ -134,6 +157,12 @@ def run(addr, *commands):
             break
     handler.close()
     return results
+
+class VarnishServer(object):
+    
+    def __init__(self, secret, addr):
+        self.addr = addr
+        self.secret = secret
 
 class VarnishManager(object):
     def __init__(self, servers):
