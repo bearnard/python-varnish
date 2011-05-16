@@ -4,11 +4,7 @@ from varnish import VarnishManager, VarnishServer
 from pprint import pprint
 
 in_data = raw_input('Varnish Management Address (secret@ip:port): ').split('@')
-addr = in_data[1]
-secret = in_data[0]
-#server = VarnishServer(addr, secret)
 server = VarnishServer(*in_data)
-#manager = VarnishManager((raw_input('Varnish Management Address (secret@ip:port): '),))
 manager = VarnishManager((server,))
 
 while 1:
